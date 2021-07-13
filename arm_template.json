@@ -1,0 +1,384 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "defaultValue": "demoADF",
+            "metadata": {
+                "description": "The name you provide will be appended with a unique sting to make it globally available. The name can contain only letters, numbers and hyphens. The first and last characters must be a letter or number. Spaces are not allowed."
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "eastus",
+            "metadata": {
+                "description": "Location of the data factory. Currently, only East US, East US 2, and West Europe are supported. "
+            }
+        },
+        "storageAccountName": {
+            "type": "string",
+            "defaultValue": "storageact",
+            "metadata": {
+                "description": "The name you provide will be appended with a unique sting to make it globally available. The field can contain only lowercase letters and numbers. Name must be between 1 and 11 characters."
+            }      
+        },
+        "containerName": {
+            "type": "string",
+            "defaultValue": "input",
+            "metadata": {
+              "description": "Specifies the name of the blob container."
+            }
+        },
+        "serverName": {
+            "type": "string",
+            "metadata": {
+                "description": "The name you provide will be appended with a unique sting to make it globally available. Your server name can contain only lowercase letters, numbers, and '-', but can't start or end with '-' or have more than 50 characters."
+            }
+        },
+        "databaseName": {
+            "type": "string",
+            "metadata": {
+                "description": "Value should not match special patterns. It should contain a length of maximum of 128."
+            }
+        },
+        "sqlServerAdministratorLogin": {
+            "type": "string",
+            "metadata": {
+                "description": "Your login name must not contain a SQL Identifier or a typical system name (like admin, administrator, sa, root, dbmanager, loginmanager, etc.) or a built-in database user or role (like dbo, guest, public, etc.)"
+            },
+            "defaultValue": "Specify administrator username of SQL server if selected 'Yes'"
+        },
+        "sqlServerAdministratorLoginPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "Your password must be at least 8 characters in length. Your password must contain characters from three of the following categories – English uppercase letters, English lowercase letters, numbers (0-9), and non-alphanumeric characters (!, $, #, %, etc.) Your password cannot contain all or part of the login name. Part of a login name is defined as three or more consecutive alphanumeric characters."
+            }
+        }
+    },
+    "variables": {
+        "databaseCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]",
+        "storageAccountId": "[concat(resourceGroup().id,'/providers/Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]"
+    },
+    "resources": [
+
+        {
+            "type": "Microsoft.DataFactory/factories",
+            "apiVersion": "2018-06-01",
+            "name": "[parameters('factoryName')]",
+            "location": "[parameters('location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            }
+        },
+
+        {
+            "type": "Microsoft.Storage/storageAccounts",
+            "apiVersion": "2019-06-01",
+            "name": "[parameters('storageAccountName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                 "name": "Standard_LRS",
+                 "tier": "Standard"
+                },
+            "kind": "StorageV2",
+            "properties": {
+                "accessTier": "Hot"
+            },
+            "resources": [
+                {
+                  "type": "blobServices/containers",
+                  "apiVersion": "2019-06-01",
+                  "name": "[concat('default/', parameters('containerName'))]",
+                  "dependsOn": [
+                    "[parameters('storageAccountName')]"
+                  ]
+                }
+            ]
+       },
+
+       {
+        "name": "[parameters('serverName')]",
+        "type": "Microsoft.Sql/servers",
+        "apiVersion": "2019-06-01-preview",
+        "location": "[parameters('location')]",
+        "tags": {
+            "Environment": "Public",
+            "AssociatedDataSet": "USAFacts"
+        },
+        "properties": {
+          "administratorLogin": "[parameters('sqlServerAdministratorLogin')]",
+          "administratorLoginPassword": "[parameters('sqlServerAdministratorLoginPassword')]",
+          "version": "12.0"
+        },
+        "resources": [
+            {
+                "name": "[parameters('databaseName')]",
+                "type": "databases",
+                "apiVersion": "2019-06-01-preview",
+                "location": "[parameters('location')]",
+                "tags": {
+                    "Environment": "Public",
+                    "AssociatedDataSet": "USAFacts"
+                },
+                "sku": {
+                    "name": "Basic",
+                    "tier": "Basic",
+                    "capacity": 5
+                },
+                "properties": {
+                    "collation": "[variables('databaseCollation')]"
+                },
+                "dependsOn": [
+                "[parameters('serverName')]"
+                ]
+            },
+            {
+                "name": "AllowAllMicrosoftAzureIps",
+                "type": "firewallrules",
+                "apiVersion": "2015-05-01-preview",
+                "location": "[parameters('location')]",
+                "tags": {
+                    "Environment": "Public",
+                    "AssociatedDataSet": "USAFacts"
+                },
+                "properties": {
+                    "endIpAddress": "0.0.0.0",
+                    "startIpAddress": "0.0.0.0"
+                },
+                "dependsOn": [
+                    "[parameters('serverName')]"
+                ]
+            }
+        ]
+    },
+
+    {
+        "name": "[concat(parameters('factoryName'), '/blobToSqlCopyData')]",
+        "type": "Microsoft.DataFactory/factories/pipelines",
+        "apiVersion": "2018-06-01",
+        "properties": {
+            "activities": [
+                {
+                    "name": "Create Schema if does not exists",
+                    "type": "Lookup",
+                    "dependsOn": [],
+                    "policy": {
+                        "timeout": "7.00:00:00",
+                        "retry": 0,
+                        "retryIntervalInSeconds": 30,
+                        "secureOutput": false,
+                        "secureInput": false
+                    },
+                    "userProperties": [],
+                    "typeProperties": {
+                        "source": {
+                            "type": "AzureSqlSource",
+                            "sqlReaderQuery": {
+                                "value": "IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'demo')\nBEGIN\nEXEC('CREATE SCHEMA demo')\nselect Count(*) from sys.symmetric_keys;\nEND\n\nELSE\nBEGIN\n select Count(*) from sys.symmetric_keys;\nEND",
+                                "type": "Expression"
+                            },
+                            "queryTimeout": "02:00:00",
+                            "partitionOption": "None"
+                        },
+                        "dataset": {
+                            "referenceName": "AzureSqlTableDatabase",
+                            "type": "DatasetReference",
+                            "parameters": {
+                                "schemaName": "demo",
+                                "tableName": "hospital_info"
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "SinkCSV",
+                    "type": "ExecuteDataFlow",
+                    "dependsOn": [
+                        {
+                            "activity": "Create Schema if does not exists",
+                            "dependencyConditions": [
+                                "Succeeded"
+                            ]
+                        }
+                    ],
+                    "policy": {
+                        "timeout": "1.00:00:00",
+                        "retry": 0,
+                        "retryIntervalInSeconds": 30,
+                        "secureOutput": false,
+                        "secureInput": false
+                    },
+                    "userProperties": [],
+                    "typeProperties": {
+                        "dataflow": {
+                            "referenceName": "Transformation",
+                            "type": "DataFlowReference",
+                            "parameters": {},
+                            "datasetParameters": {
+                                "sourceCSV": {},
+                                "sinkCSV": {
+                                    "schemaName": "demo",
+                                    "tableName": "hospital_info"
+                                }
+                            }
+                        },
+                        "staging": {},
+                        "compute": {
+                            "coreCount": 8,
+                            "computeType": "General"
+                        },
+                        "traceLevel": "Fine"
+                    }
+                }
+            ],
+            "annotations": []
+        },
+        "dependsOn": [
+            "[parameters('factoryName')]",
+            "[concat(variables('factoryId'), '/datasets/AzureSqlTableDatabase')]",
+            "[concat(variables('factoryId'), '/dataflows/Transformation')]"
+        ]
+    },
+
+        
+        
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureBlobStorageLinkedService')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureBlobStorage",
+                "typeProperties": {
+                    "connectionString": "[concat('DefaultEndpointsProtocol=https;AccountName=',parameters('storageAccountName'),';AccountKey=',concat(listKeys(variables('storageAccountId'),'2015-05-01-preview').key1),';EndpointSuffix=core.windows.net')]"
+                }
+            },
+            "dependsOn": [
+                "[parameters('factoryName')]",
+                "[parameters('storageAccountName')]"
+            ]
+        },
+
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureSqlDatabaseLinkedService')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureSqlDatabase",
+                "typeProperties": {
+                    "connectionString": "[concat('Server=tcp:',parameters('serverName'),'.database.windows.net,1433;Initial Catalog=',parameters('databaseName'),';Persist Security Info=False;User ID=',parameters('sqlServerAdministratorLogin'),';MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]"
+                }
+            },
+            "dependsOn": [
+                "[parameters('factoryName')]",
+                "[parameters('storageAccountName')]"
+            ]
+        },
+
+
+        {
+            "name": "[concat(parameters('factoryName'), '/source_data')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureBlobStorageLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "annotations": [],
+                "type": "DelimitedText",
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobStorageLocation",
+                        "fileName": "input.csv",
+                        "container": "input"
+                    },
+                    "columnDelimiter": ",",
+                    "escapeChar": "\\",
+                    "firstRowAsHeader": true,
+                    "quoteChar": "\""
+                },
+                "schema": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureBlobStorageLinkedService')]"
+            ]
+        },
+
+        {
+            "name": "[concat(parameters('factoryName'), '/AzureSqlTableDatabase')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "AzureSqlDatabaseLinkedService",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "schemaName": {
+                        "type": "string"
+                    },
+                    "tableName": {
+                        "type": "string"
+                    }
+                },
+                "annotations": [],
+                "type": "AzureSqlTable",
+                "schema": [],
+                "typeProperties": {
+                    "schema": {
+                        "value": "@dataset().schemaName",
+                        "type": "Expression"
+                    },
+                    "table": {
+                        "value": "@dataset().tableName",
+                        "type": "Expression"
+                    }
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/AzureSqlDatabaseLinkedService')]"
+            ]
+        },
+
+        {
+            "name": "[concat(parameters('factoryName'), '/Transformation')]",
+            "type": "Microsoft.DataFactory/factories/dataflows",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "type": "MappingDataFlow",
+                "typeProperties": {
+                    "sources": [
+                        {
+                            "dataset": {
+                                "referenceName": "source_data",
+                                "type": "DatasetReference"
+                            },
+                            "name": "sourceCSV"
+                        }
+                    ],
+                    "sinks": [
+                        {
+                            "dataset": {
+                                "referenceName": "AzureSqlTableDatabase",
+                                "type": "DatasetReference"
+                            },
+                            "name": "sinkCSV"
+                        }
+                    ],
+                    "transformations": [],
+                    "script": "source(allowSchemaDrift: true,\n\tvalidateSchema: false,\n\tignoreNoFilesFound: false,\n\tpartitionBy('hash', 1)) ~> sourceCSV\nsourceCSV sink(allowSchemaDrift: true,\n\tvalidateSchema: false,\n\tdeletable:false,\n\tinsertable:true,\n\tupdateable:false,\n\tupsertable:false,\n\tformat: 'table',\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true,\n\terrorHandlingOption: 'stopOnFirstError') ~> sinkCSV"
+                }
+            },
+            "dependsOn": [
+                "[parameters('factoryName')]",
+                "[concat(variables('factoryId'), '/datasets/source_data')]",
+                "[concat(variables('factoryId'), '/datasets/AzureSqlTableDatabase')]"
+            ]
+        }
+   
+    ]
+}
